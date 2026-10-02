@@ -1,0 +1,52 @@
+name: AI Review
+
+# Reusable: every TBO repository calls this from its own .github/workflows/ai-review.yml
+# (see caller.yml). Kimi reads the pull request and posts one review comment; blockers
+# fail the "ai-review / review" check. A person still approves the merge.
+on:
+  workflow_call:
+    secrets:
+      KIMI_API_KEY:
+        required: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  review:
+    name: review
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # drafts wait until they are ready; fork PRs get no secrets, so they are reviewed by people
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Check out the pull request
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check out the reviewer
+        uses: actions/checkout@v4
+        with:
+          repository: tbocloud/ai-review
+          ref: v1
+          path: .ai-review
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Review the pull request
+        env:
+          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+          AI_REVIEW_MODEL: ${{ vars.AI_REVIEW_MODEL || 'kimi-k2.6' }}
+          AI_REVIEW_BASE_URL: ${{ vars.AI_REVIEW_BASE_URL || 'https://api.moonshot.ai/v1' }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python .ai-review/ai_review.py
