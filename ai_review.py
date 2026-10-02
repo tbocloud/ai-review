@@ -19,7 +19,9 @@ MAX_DIFF_CHARS = 150_000
 MAX_RULES_CHARS = 20_000
 # Kimi thinks before it answers: give it room and time, as the hub's triage does
 TIMEOUT = 600
-MAX_ANSWER_TOKENS = 16_000
+MAX_ANSWER_TOKENS = 32_000
+# when thinking still runs out of room, try once more with a shorter diff
+RETRY_DIFF_CHARS = 50_000
 DEFAULT_MODEL = "kimi-k2.6"
 DEFAULT_BASE_URL = "https://api.moonshot.ai/v1"
 # generated or vendored files a reviewer can't usefully read
@@ -75,7 +77,7 @@ def main() -> int:
         # an outage must not block every merge; people still review
         print(f"::warning::AI review could not run: {error}")
         upsert_comment(
-            f"**AI review could not run** ({type(error).__name__}). "
+            f"**AI review could not run** ({error}). "
             "Please review this change manually."
         )
         return 0
@@ -109,7 +111,19 @@ def repository_rules() -> str:
     return "(this repository has no AGENTS.md)"
 
 
+class OutOfRoom(ValueError):
+    """The model used its whole answer budget (usually thinking) before writing the JSON."""
+
+
 def ask_model(diff: str, rules: str) -> dict:
+    try:
+        return ask_model_once(diff, rules)
+    except OutOfRoom:
+        short = diff[:RETRY_DIFF_CHARS] + "\n\n[diff truncated: review the rest manually]"
+        return ask_model_once(short, rules)
+
+
+def ask_model_once(diff: str, rules: str) -> dict:
     body = {
         "model": model_name(),
         "messages": [
@@ -133,8 +147,15 @@ def ask_model(diff: str, rules: str) -> dict:
         },
     )
     with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
-        answer = json.load(response)["choices"][0]["message"].get("content") or ""
-    review = parse_review(answer)
+        choice = json.load(response)["choices"][0]
+    answer = choice["message"].get("content") or ""
+    if choice.get("finish_reason") == "length" and "{" not in answer:
+        raise OutOfRoom(f"the model ran out of room ({MAX_ANSWER_TOKENS} tokens)")
+    try:
+        review = parse_review(answer)
+    except ValueError as error:
+        reason = choice.get("finish_reason")
+        raise ValueError(f"{error} (finish_reason={reason}, {len(answer)} chars)") from error
     review.setdefault("findings", [])
     return review
 

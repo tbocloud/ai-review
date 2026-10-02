@@ -18,7 +18,8 @@ jobs:
   review:
     name: review
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # two thinking-model calls of up to 10 minutes each
+    timeout-minutes: 25
     # drafts wait until they are ready; fork PRs get no secrets, so they are reviewed by people
     if: >-
       github.event.pull_request.draft == false &&
