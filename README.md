@@ -17,7 +17,7 @@ gh secret set KIMI_API_KEY --org teambackoffice --visibility all
 
 Until the secret exists the check passes with a notice, so nothing is blocked. Optional organisation variables: `AI_REVIEW_MODEL` (default `kimi-k2.6`) and `AI_REVIEW_BASE_URL` (default `https://api.moonshot.ai/v1`).
 
-Pull requests from forks get no secrets, so they are left to people. If Kimi is down, the review says so and passes.
+Pull requests from forks get no secrets, so they are left to people. Drafts are reviewed once they are marked ready. If Kimi is down, the review says so and passes.
 
 ## Changing the reviewer
 
