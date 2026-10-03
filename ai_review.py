@@ -6,6 +6,7 @@ duplicated) and fails the check only when the model reports a blocker.
 A person still approves the merge; this catches problems before they look.
 """
 
+import http.client
 import json
 import os
 import re
@@ -73,7 +74,13 @@ def main() -> int:
 
     try:
         review = ask_model(diff, repository_rules())
-    except (urllib.error.URLError, TimeoutError, ValueError) as error:
+    # a dropped or reset connection (http.client, OSError) is an outage like any other
+    except (
+        urllib.error.URLError,
+        http.client.HTTPException,
+        OSError,
+        ValueError,
+    ) as error:
         # an outage must not block every merge; people still review
         print(f"::warning::AI review could not run: {error}")
         upsert_comment(
