@@ -19,6 +19,21 @@ Until the secret exists the check passes with a notice, so nothing is blocked. O
 
 Pull requests from forks get no secrets, so they are left to people. Drafts are reviewed once they are marked ready. If Kimi is down, the review says so and passes.
 
+## Merge bot (CodeRabbit approves, the bot merges)
+
+`.github/workflows/merge-bot.yml` runs `merge_bot.py` every 10 minutes over every repository of tbocloud and teambackoffice, so a new repository is covered without adding anything to it. It merges an open pull request only when:
+
+- it isn't a draft, comes from a branch of the same repository (not a fork) and has no `no-auto-merge` label;
+- CodeRabbit's latest decision is **Approved**, for the commit now at the head;
+- every check run and commit status on that commit is green;
+- GitHub says it is mergeable (`clean`), so each repository's own branch rules still apply.
+
+It uses the repository's allowed merge method (merge commit first).
+
+**Setup:** add a token that can merge in both organisations as the `MERGE_BOT_TOKEN` secret of this repository. Until it exists, runs do nothing. Use a classic token with the `repo` scope, or better, a GitHub App installed on both organisations with Contents, Pull requests, Checks and Commit statuses permissions.
+
+**Stop it for one pull request:** add the `no-auto-merge` label. **Try it safely:** Actions → merge-bot → Run workflow; "dry run" is ticked by default and only lists what would merge.
+
 ## Changing the reviewer
 
 Callers use the `v1` tag. Change `ai_review.py` through a pull request here, then move the tag: `git tag -f v1 && git push -f origin v1`.

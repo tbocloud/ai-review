@@ -1,0 +1,43 @@
+# Merges, in every repository of both organisations, each open pull request that
+# CodeRabbit approved and whose checks are green. New repositories need nothing:
+# the run lists the organisations' repositories each time. See merge_bot.py.
+name: merge-bot
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "List what would merge, merge nothing"
+        type: boolean
+        default: true
+
+concurrency:
+  group: merge-bot
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Merge approved pull requests
+        env:
+          GH_TOKEN: ${{ secrets.MERGE_BOT_TOKEN }}
+          ORGS: tbocloud,teambackoffice
+          # scheduled runs merge for real; a manual run is a dry run unless unticked
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::MERGE_BOT_TOKEN isn't set yet, nothing to do."
+            exit 0
+          fi
+          python merge_bot.py
