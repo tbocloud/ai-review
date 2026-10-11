@@ -6,7 +6,9 @@ all of these hold:
 
 - it isn't a draft, doesn't carry the `no-auto-merge` label and comes from a branch
   of the same repository (never a fork);
-- CodeRabbit's latest decision on it is APPROVED, for the commit now at its head;
+- CodeRabbit's latest decision on it is APPROVED, for the commit now at its head
+  (or for an earlier commit followed only by merge commits, which CodeRabbit
+  reviews without approving again);
 - every check run and commit status on that commit finished green;
 - GitHub reports it mergeable ("clean"), so branch rules still apply.
 
@@ -70,7 +72,24 @@ def coderabbit_approved(repo, pr):
     if not decisions:
         return False
     last = decisions[-1]
-    return last["state"] == "APPROVED" and last["commit_id"] == pr["head"]["sha"]
+    if last["state"] != "APPROVED":
+        return False
+    if last["commit_id"] == pr["head"]["sha"]:
+        return True
+    return only_merge_commits_since(repo, pr, last["commit_id"])
+
+
+def only_merge_commits_since(repo, pr, approved_sha):
+    """CodeRabbit doesn't re-approve a commit that only merges the base branch in
+    ("Already reviewed the last commit"), so its approval still counts when every
+    commit after the approved one is a merge commit."""
+    commits = list(pages(f"/repos/{repo}/pulls/{pr['number']}/commits"))
+    shas = [c["sha"] for c in commits]
+    if approved_sha not in shas:
+        # the approved commit was rewritten away (force-push): needs a new review
+        return False
+    later = commits[shas.index(approved_sha) + 1 :]
+    return bool(later) and all(len(c["parents"]) > 1 for c in later)
 
 
 def checks_green(repo, sha):
