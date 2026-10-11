@@ -83,12 +83,18 @@ def only_merge_commits_since(repo, pr, approved_sha):
     """CodeRabbit doesn't re-approve a commit that only merges the base branch in
     ("Already reviewed the last commit"), so its approval still counts when every
     commit after the approved one is a merge commit."""
-    commits = list(pages(f"/repos/{repo}/pulls/{pr['number']}/commits"))
-    shas = [c["sha"] for c in commits]
-    if approved_sha not in shas:
-        # the approved commit was rewritten away (force-push): needs a new review
+    # compare lists, in order, the commits the head has on top of the approved one;
+    # "ahead" means the approved commit is still an ancestor (no force-push dropped it)
+    try:
+        diff, _ = call(
+            "GET", f"/repos/{repo}/compare/{approved_sha}...{pr['head']['sha']}"
+        )
+    except urllib.error.HTTPError:
         return False
-    later = commits[shas.index(approved_sha) + 1 :]
+    later = diff.get("commits") or []
+    if diff.get("status") != "ahead" or diff.get("total_commits") != len(later):
+        # rewritten history, or too many commits to see them all: needs a new review
+        return False
     return bool(later) and all(len(c["parents"]) > 1 for c in later)
 
 
