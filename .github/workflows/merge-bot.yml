@@ -5,7 +5,9 @@ name: merge-bot
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    # off the round minutes: GitHub delays or drops scheduled runs at :00 under load,
+    # and "*/10" never fired once in the first three hours
+    - cron: "7,17,27,37,47,57 * * * *"
   workflow_dispatch:
     inputs:
       dry_run:
