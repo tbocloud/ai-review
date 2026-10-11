@@ -79,23 +79,34 @@ def coderabbit_approved(repo, pr):
     return only_merge_commits_since(repo, pr, last["commit_id"])
 
 
+MAX_MERGES_AFTER_APPROVAL = 20
+
+
 def only_merge_commits_since(repo, pr, approved_sha):
     """CodeRabbit doesn't re-approve a commit that only merges the base branch in
-    ("Already reviewed the last commit"), so its approval still counts when every
-    commit after the approved one is a merge commit."""
-    # compare lists, in order, the commits the head has on top of the approved one;
-    # "ahead" means the approved commit is still an ancestor (no force-push dropped it)
+    ("Already reviewed the last commit"), so its approval still counts when the pull
+    request's own history after the approved commit is nothing but merges of the base
+    branch: walking first parents from the head reaches the approved commit, and every
+    commit on the way is a merge whose other parent is already in the base branch."""
+    sha = pr["head"]["sha"]
+    base = pr["base"]["ref"]
     try:
-        diff, _ = call(
-            "GET", f"/repos/{repo}/compare/{approved_sha}...{pr['head']['sha']}"
-        )
+        for _ in range(MAX_MERGES_AFTER_APPROVAL):
+            if sha == approved_sha:
+                return True
+            commit, _ = call("GET", f"/repos/{repo}/commits/{sha}")
+            parents = [p["sha"] for p in commit["parents"]]
+            if len(parents) < 2:
+                return False
+            # base...merged is "ahead"/"identical" when the merged side is in base
+            merged, _ = call("GET", f"/repos/{repo}/compare/{parents[1]}...{base}")
+            if merged["status"] not in ("ahead", "identical"):
+                return False
+            sha = parents[0]
     except urllib.error.HTTPError:
         return False
-    later = diff.get("commits") or []
-    if diff.get("status") != "ahead" or diff.get("total_commits") != len(later):
-        # rewritten history, or too many commits to see them all: needs a new review
-        return False
-    return bool(later) and all(len(c["parents"]) > 1 for c in later)
+    # too many merges to follow, or the approved commit isn't on the first-parent path
+    return False
 
 
 def checks_green(repo, sha):
