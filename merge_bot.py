@@ -6,7 +6,9 @@ all of these hold:
 
 - it isn't a draft, doesn't carry the `no-auto-merge` label and comes from a branch
   of the same repository (never a fork);
-- CodeRabbit's latest decision on it is APPROVED, for the commit now at its head;
+- CodeRabbit's latest decision on it is APPROVED, for the commit now at its head
+  (or for an earlier commit followed only by merge commits, which CodeRabbit
+  reviews without approving again);
 - every check run and commit status on that commit finished green;
 - GitHub reports it mergeable ("clean"), so branch rules still apply.
 
@@ -70,7 +72,41 @@ def coderabbit_approved(repo, pr):
     if not decisions:
         return False
     last = decisions[-1]
-    return last["state"] == "APPROVED" and last["commit_id"] == pr["head"]["sha"]
+    if last["state"] != "APPROVED":
+        return False
+    if last["commit_id"] == pr["head"]["sha"]:
+        return True
+    return only_merge_commits_since(repo, pr, last["commit_id"])
+
+
+MAX_MERGES_AFTER_APPROVAL = 20
+
+
+def only_merge_commits_since(repo, pr, approved_sha):
+    """CodeRabbit doesn't re-approve a commit that only merges the base branch in
+    ("Already reviewed the last commit"), so its approval still counts when the pull
+    request's own history after the approved commit is nothing but merges of the base
+    branch: walking first parents from the head reaches the approved commit, and every
+    commit on the way is a merge whose other parent is already in the base branch."""
+    sha = pr["head"]["sha"]
+    base = pr["base"]["ref"]
+    try:
+        for _ in range(MAX_MERGES_AFTER_APPROVAL):
+            if sha == approved_sha:
+                return True
+            commit, _ = call("GET", f"/repos/{repo}/commits/{sha}")
+            parents = [p["sha"] for p in commit["parents"]]
+            if len(parents) < 2:
+                return False
+            # base...merged is "ahead"/"identical" when the merged side is in base
+            merged, _ = call("GET", f"/repos/{repo}/compare/{parents[1]}...{base}")
+            if merged["status"] not in ("ahead", "identical"):
+                return False
+            sha = parents[0]
+    except urllib.error.HTTPError:
+        return False
+    # too many merges to follow, or the approved commit isn't on the first-parent path
+    return False
 
 
 def checks_green(repo, sha):
