@@ -1,0 +1,176 @@
+name: Frappe CI
+
+# Reusable: every TBO Frappe app calls this from its own .github/workflows/frappe-ci.yml
+# (see frappe-ci-caller.yml). Lint reads only the files a change touches, so old findings
+# never block. The tests install the app on a fresh bench (with ERPNext unless told not to)
+# and run the app's own tests. TBO Support deploys a release only when the checks on its
+# commits are green ("frappe-ci / lint" and "frappe-ci / tests").
+on:
+  workflow_call:
+    inputs:
+      app:
+        description: The app's name (its Python package), for example alpha_trading
+        required: true
+        type: string
+      frappe-branch:
+        description: Frappe's branch
+        required: false
+        type: string
+        default: version-15
+      erpnext:
+        description: Install ERPNext before the app
+        required: false
+        type: boolean
+        default: true
+      erpnext-branch:
+        description: ERPNext's branch; empty means the same as Frappe's
+        required: false
+        type: string
+        default: ""
+      other-apps:
+        description: Apps to install before this one, one per line as "url branch" (for example "https://github.com/frappe/hrms version-15")
+        required: false
+        type: string
+        default: ""
+      python-version:
+        required: false
+        type: string
+        default: "3.11"
+      node-version:
+        required: false
+        type: string
+        default: "18"
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: The changed files
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            BASE="$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)"
+          fi
+          git diff --name-only --diff-filter=ACMR "$BASE" HEAD > "$RUNNER_TEMP/changed.txt"
+          echo "Changed since ${BASE:0:12}:"
+          cat "$RUNNER_TEMP/changed.txt"
+
+      - name: The repository's pre-commit hooks, on the changed files
+        if: hashFiles('.pre-commit-config.yaml') != ''
+        run: |
+          pip install pre-commit
+          xargs -r -a "$RUNNER_TEMP/changed.txt" pre-commit run --show-diff-on-failure --color always --files
+
+      - name: Ruff errors in the changed Python files
+        if: hashFiles('.pre-commit-config.yaml') == ''
+        run: |
+          pip install ruff
+          grep -E '\.py$' "$RUNNER_TEMP/changed.txt" | xargs -r ruff check --select E9,F63,F7,F82 --output-format github
+
+  tests:
+    name: tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    services:
+      redis-cache:
+        image: redis:alpine
+        ports:
+          - 13000:6379
+      redis-queue:
+        image: redis:alpine
+        ports:
+          - 11000:6379
+      mariadb:
+        image: mariadb:10.6
+        env:
+          MARIADB_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: --health-cmd="healthcheck.sh --connect --innodb_initialized" --health-interval=5s --health-timeout=2s --health-retries=10
+
+    env:
+      APP: ${{ inputs.app }}
+      FRAPPE_BRANCH: ${{ inputs.frappe-branch }}
+      WITH_ERPNEXT: ${{ inputs.erpnext }}
+      ERPNEXT_BRANCH: ${{ inputs.erpnext-branch || inputs.frappe-branch }}
+      OTHER_APPS: ${{ inputs.other-apps }}
+      CI: "Yes"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: app
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: The MariaDB client
+        run: sudo apt-get update && sudo apt-get install -y mariadb-client
+
+      - name: A fresh bench
+        run: |
+          pip install frappe-bench
+          bench init --skip-redis-config-generation --skip-assets --frappe-branch "$FRAPPE_BRANCH" --python "$(which python)" ~/frappe-bench
+          mariadb --host 127.0.0.1 --port 3306 -u root -proot -e "SET GLOBAL character_set_server = 'utf8mb4'"
+          mariadb --host 127.0.0.1 --port 3306 -u root -proot -e "SET GLOBAL collation_server = 'utf8mb4_unicode_ci'"
+
+      - name: The apps, on a new site
+        working-directory: /home/runner/frappe-bench
+        run: |
+          if [ "$WITH_ERPNEXT" = "true" ]; then bench get-app --branch "$ERPNEXT_BRANCH" erpnext; fi
+          others=""
+          while read -r url branch; do
+            [ -z "$url" ] && continue
+            bench get-app --branch "$branch" "$url"
+            others="$others $(basename "$url" .git)"
+          done <<< "$OTHER_APPS"
+          bench get-app "$APP" "$GITHUB_WORKSPACE/app"
+          bench setup requirements --dev
+          bench new-site --db-root-password root --admin-password admin test_site
+          if [ "$WITH_ERPNEXT" = "true" ]; then bench --site test_site install-app erpnext; fi
+          for other in $others; do bench --site test_site install-app "$other"; done
+          bench --site test_site install-app "$APP"
+
+      - name: The app's assets, when they changed
+        working-directory: /home/runner/frappe-bench
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          cd "$GITHUB_WORKSPACE/app"
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            BASE="$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)"
+          fi
+          if git diff --name-only "$BASE" HEAD | grep -q "^$APP/public/"; then
+            cd /home/runner/frappe-bench && bench build --app "$APP"
+          else
+            echo "No change under $APP/public/"
+          fi
+
+      - name: The app's tests
+        working-directory: /home/runner/frappe-bench
+        run: |
+          bench --site test_site set-config allow_tests true
+          bench --site test_site run-tests --app "$APP"
+        env:
+          TYPE: server

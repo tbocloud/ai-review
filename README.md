@@ -19,6 +19,17 @@ Until the secret exists the check passes with a notice, so nothing is blocked. O
 
 Pull requests from forks get no secrets, so they are left to people. Drafts are reviewed once they are marked ready. If Kimi is down, the review says so and passes.
 
+## Frappe CI (every app's tests, before TBO Support deploys)
+
+`.github/workflows/frappe-app-ci.yml` is a reusable CI for TBO's Frappe apps:
+
+- **lint**: the repository's own pre-commit hooks on the files the change touches (or, without a pre-commit configuration, Ruff's errors only), so old findings never block;
+- **tests**: the app installed on a fresh bench (Frappe and ERPNext of the branch given, MariaDB 10.6, Redis), its assets built when `public/` changed, then `bench run-tests --app`.
+
+**How a repository uses it:** copy [`frappe-ci-caller.yml`](frappe-ci-caller.yml) to `.github/workflows/frappe-ci.yml`, set `app` (and `frappe-branch`, `erpnext: false` or `other-apps` when needed), and keep the push trigger on the branch the customer's site runs. The checks are named `frappe-ci / lint` and `frappe-ci / tests`. TBO Support releases a merge only when the checks on its commits are green (helpdesk `docs/tbo-copilot.md`, "Releases of every merge"); a senior may let a release through with a reason.
+
+Public repositories run it for free; a private repository uses its organisation's Actions minutes.
+
 ## Merge bot (CodeRabbit approves, the bot merges)
 
 `.github/workflows/merge-bot.yml` runs `merge_bot.py` every 10 minutes over every repository of tbocloud and teambackoffice, so a new repository is covered without adding anything to it. It merges an open pull request only when:

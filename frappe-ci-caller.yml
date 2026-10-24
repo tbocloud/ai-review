@@ -1,0 +1,27 @@
+name: Frappe CI
+
+# The Frappe app's CI (tbocloud/ai-review, frappe-app-ci.yml): lint on the changed files,
+# then the app's tests on a fresh bench. TBO Support deploys a release only when the checks
+# "frappe-ci / lint" and "frappe-ci / tests" are green on its commits, so it also runs on
+# every push to the branch the customer's site runs.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: frappe-ci-${{ github.event.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  frappe-ci:
+    uses: tbocloud/ai-review/.github/workflows/frappe-app-ci.yml@v1
+    with:
+      app: your_app # the app's Python package
+      frappe-branch: version-15
+      # erpnext: false                 # an app that does not need ERPNext
+      # other-apps: |                  # apps to install first, "url branch" per line
+      #   https://github.com/frappe/hrms version-15
